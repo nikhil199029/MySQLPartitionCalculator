@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MySQL Partition and Configuration Calculator</title>
+     <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f0f0f0;
+            color: #333;
+            margin: 20px;
+            padding: 20px;
+        }
+        h2, h3 {
+            color: #007bff;
+        }
+        form {
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        fieldset {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        legend {
+            padding: 0 5px;
+            color: #007bff;
+            font-weight: bold;
+        }
+        label {
+            display: block;
+            margin: 10px 0 5px;
+        }
+        input[type="number"], input[type="text"], select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box; /* Makes width include padding and border */
+            transition: border-color 0.3s;
+        }
+        input[type="number"]:focus, input[type="text"]:focus, select:focus {
+            border-color: #007bff;
+            outline: none;
+        }
+        input[type="button"] {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        input[type="button"]:hover {
+            background-color: #0056b3;
+        }
+        #result {
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #28a745;
+        }
+        #mysqlConfig {
+            animation: fadeIn 1s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+    <script>
+        const cloudDefaults = {
+            "AWS": {cpuCores: 8, ramSize: 32, diskType: "NVMe_SSD", networkBandwidth: 10},
+            "Azure": {cpuCores: 8, ramSize: 32, diskType: "NVMe_SSD", networkBandwidth: 10},
+            "GCP": {cpuCores: 8, ramSize: 32, diskType: "NVMe_SSD", networkBandwidth: 10}
+        };
+
+        function autofillDefaults() {
+            const selectedCloud = document.getElementById('cloudProvider').value;
+            const defaults = cloudDefaults[selectedCloud];
+            if (defaults) {
+                document.getElementById('cpuCores').value = defaults.cpuCores;
+                document.getElementById('ramSize').value = defaults.ramSize;
+                document.getElementById('diskType').value = defaults.diskType;
+                document.getElementById('networkBandwidth').value = defaults.networkBandwidth;
+            }
+        }
+
+        function calculatePartitions() {
+          const cpuCores = parseInt(document.getElementById('cpuCores').value, 10) || 0;
+          const ramSize = parseInt(document.getElementById('ramSize').value, 10) || 0;
+          const diskType = document.getElementById('diskType').value;
+          const writeRatioParts = document.getElementById('writeReadRatio').value.split(':').map(Number);
+          const writeRatio = writeRatioParts[0] / (writeRatioParts[1] + writeRatioParts[0]);
+          const transactionSize = parseInt(document.getElementById('transactionSize').value, 10) || 1;
+          const numberOfTables = parseInt(document.getElementById('numberOfTables').value, 10) || 1;
+          const averageJoinsPerQuery = parseInt(document.getElementById('averageJoinsPerQuery').value, 10) || 0;
+
+          // Ensure we have valid numbers to avoid NaN results
+          if (isNaN(cpuCores) || isNaN(ramSize) || isNaN(transactionSize) || isNaN(numberOfTables) || isNaN(averageJoinsPerQuery)) {
+              document.getElementById('result').innerText = 'Please make sure all input fields are filled out correctly.';
+              return;
+          }
+
+          const diskMultiplier = diskType === 'NVMe_SSD' ? 1.5 : diskType === 'SATA_SSD' ? 1.2 : 1.0;
+          let estimatedWritesPerPartition = 2000 * (cpuCores || 1) * diskMultiplier;
+          estimatedWritesPerPartition *= (writeRatio || 1);
+          const complexityMultiplier = 1 - ((numberOfTables * averageJoinsPerQuery) / 10000);
+          estimatedWritesPerPartition *= Math.max(0.5, complexityMultiplier);
+
+          // Correcting the calculation for total writes based on inputs and defaulting to 1 to prevent division by zero
+          const totalWrites =parseInt(document.getElementById('writesPerSecond').value, 10) || 1;
+          const partitions = Math.ceil(totalWrites / (estimatedWritesPerPartition || 1));
+
+          document.getElementById('result').innerText = `Number of Partitions Needed: ${partitions}` ;
+          suggestMySQLConfigurations(ramSize, cpuCores, diskType);
+      }
+
+        function suggestMySQLConfigurations(ramSize, cpuCores, diskType) {
+            const innodbBufferPoolSize = Math.ceil(ramSize * 0.8);
+            const innodbIOCapacity = diskType === 'NVMe_SSD' ? 20000 : diskType === 'SATA_SSD' ? 10000 : 5000;
+            const maxConnections = cpuCores * 100;
+
+            document.getElementById('mysqlConfig').innerHTML = `
+                <h3>Recommended MySQL Configurations:</h3>
+                <p><strong>innodb_buffer_pool_size:</strong> ${innodbBufferPoolSize}G (80% of RAM)</p>
+                <p><strong>innodb_io_capacity:</strong> ${innodbIOCapacity} (Depends on Disk Type)</p>
+                <p><strong>max_connections:</strong> ${maxConnections} (Based on CPU Cores)</p>
+            `;
+        }
+    </script>
+</head>
+<body>
+    <h2>MySQL Partition and Configuration Calculator</h2>
+    <form id="partitionForm">
+      <!-- Add this within your form, likely in the "Nature of the Workload" fieldset -->
+      <label for="writesPerSecond">Writes Per Second (WPS):</label>
+      <input type="number" id="writesPerSecond" name="writesPerSecond" required>
+
+        <label for="cloudProvider">Cloud Provider:</label>
+        <select id="cloudProvider" onchange="autofillDefaults()">
+            <option value="">Select Cloud Provider</option>
+            <option value="AWS">AWS</option>
+            <option value="Azure">Azure</option>
+            <option value="GCP">GCP</option>
+        </select><br><br>
+
+        <!-- Hardware Specifications -->
+        <fieldset>
+            <legend>Hardware Specifications:</legend>
+            <label for="cpuCores">CPU Cores:</label>
+            <input type="number" id="cpuCores" required><br>
+            <label for="ramSize">RAM Size (GB):</label>
+            <input type="number" id="ramSize" required><br>
+            <label for="diskType">Disk Type:</label>
+            <select id="diskType" required>
+                <option value="HDD">HDD</option>
+                <option value="SATA_SSD">SATA SSD</option>
+                <option value="NVMe_SSD">NVMe SSD</option>
+            </select><br>
+            <label for="networkBandwidth">Network Bandwidth (Gbps):</label>
+            <input type="number" id="networkBandwidth" required><br>
+        </fieldset><br>
+
+        <!-- Nature of the Workload -->
+        <fieldset>
+            <legend>Nature of the Workload:</legend>
+            <label for="writeReadRatio">Write-Read Ratio (Writes:Reads):</label>
+            <input type="text" id="writeReadRatio" placeholder="e.g., 1:100" required><br>
+            <label for="transactionSize">Average Transaction Size (number of rows):</label>
+            <input type="number" id="transactionSize" required><br>
+        </fieldset><br>
+
+        <!-- Database Schema Complexity -->
+        <fieldset>
+            <legend>Database Schema Complexity:</legend>
+            <label for="numberOfTables">Number of Tables:</label>
+            <input type="number" id="numberOfTables" required><br>
+            <label for="averageRowsPerTable">Average Rows per Table:</label>
+            <input type="number" id="averageRowsPerTable" required><br>
+            <label for="averageJoinsPerQuery">Average Joins per Query:</label>
+            <input type="number" id="averageJoinsPerQuery" required><br>
+        </fieldset><br>
+
+        <input type="button" value="Calculate Partitions and Suggest Configurations" onclick="calculatePartitions()">
+    </form>
+
+    <p id="result"></p>
+    <div id="mysqlConfig"></div>
+</body>
+</html>
